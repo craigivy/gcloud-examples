@@ -1,0 +1,104 @@
+# gRPC testing using https://grpcb.in/
+# also uses whereami from https://github.com/theemadnes/gke-whereami/tree/master/k8s-grpc as the health check
+apiVersion: v1
+kind: Namespace
+metadata:
+  labels:
+    istio.io/rev: default
+  name: grpcbin
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: grpcbin
+  namespace: grpcbin
+  labels:
+    app: grpcbin
+spec:
+  selector:
+    matchLabels:
+      app: grpcbin
+  template:
+    metadata:
+      labels:
+        app: grpcbin
+    spec:
+      containers:
+      - name: grpc
+        image: us-docker.pkg.dev/google-samples/containers/gke/whereami:v1.2.9
+        ports:
+          - name: grpc
+            containerPort: 9090 # This server includes grpc.health.v1.Health service but only supports plaintext (no end-to-end TLS)
+          - name: http
+            containerPort: 8080 # prom metrics, which can also be used as an HTTP based healthcheck
+        readinessProbe:
+          exec:
+            command: ["/bin/grpc_health_probe", "-addr=:9090"]
+          initialDelaySeconds: 5
+        livenessProbe:
+          exec:
+            command: ["/bin/grpc_health_probe", "-addr=:9090"]
+          initialDelaySeconds: 10
+        env:
+          - name: GRPC_ENABLED
+            value: "True"
+      # Another gRPC test server that supports both plaintext and TLS, but does not include grpc.health.v1.Health service
+      - image: moul/grpcbin:latest
+        imagePullPolicy: IfNotPresent
+        name: grpcbin
+        ports:
+        - containerPort: 9000 # Plaintext
+          protocol: TCP
+        - containerPort: 9001 # TLS
+          protocol: TCP
+---
+# Using GKE Ingress Controller to create L7 Classic HTTPS External LB https://cloud.google.com/kubernetes-engine/docs/how-to/ingress-http2
+# See requirements at https://cloud.google.com/load-balancing/docs/https#using_grpc_with_your_applications
+apiVersion: v1
+kind: Service
+metadata:
+  name: grpcbin-ingress
+  namespace: grpcbin
+  annotations:
+    cloud.google.com/app-protocols: '{"grpc-tls":"HTTP2"}'  
+    cloud.google.com/neg: '{"ingress": true}' 
+    cloud.google.com/backend-config: '{"default": "grpcbin-backendconfig"}' 
+spec:
+  ports:
+  - port: 9001
+    protocol: TCP
+    name: grpc-tls
+  selector:
+    app: grpcbin
+  type: ClusterIP # for Container Native Load Balancing, otherwise need a NodePort
+---
+# Need to customize health check, since ingress controller doesn't support gRPC based health checks on backends
+apiVersion: cloud.google.com/v1
+kind: BackendConfig
+metadata:
+  name: grpcbin-backendconfig
+  namespace: grpcbin
+spec:
+  healthCheck:
+    checkIntervalSec: 15
+    timeoutSec: 15
+    healthyThreshold: 1
+    unhealthyThreshold: 2
+    type: HTTP                      # GKE Ingress controller only supports HTTP, HTTPS, or HTTP2
+    requestPath: /metrics/healthz   # Not a real endpoint, but should work (via prometheus metrics exporter)
+    port: 8080
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: grpcbin-ingress
+  namespace: grpcbin
+  annotations:  
+    kubernetes.io/ingress.allow-http: "False"
+    ingress.gcp.kubernetes.io/pre-shared-cert: "test"   
+spec:
+  defaultBackend:
+    service:
+      name: grpcbin-ingress
+      port:         
+        number: 9001 
