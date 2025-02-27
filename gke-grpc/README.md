@@ -3,7 +3,7 @@
 ## External Ingress example
 
 ### Apply the configuration to your cluster
-* Creae and configure an SSL certififcate to be used in the ingress.  The cerficate referenced using the name `test` in the `ingress-example.yaml`.
+* Creae and configure an SSL certififcate to be used in the ingress.  The cerficate is referenced using the name `test` in the `ingress-example.yaml`.
 ```
 openssl genrsa -out test-ingress.key 2048
 openssl req -new -key test-ingress.key -out test-ingress.csr \
